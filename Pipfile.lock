@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "f3999c3f182e5f54248c2010ba5deb78e6bf3b39f7e5737f81464765ff4e677d"
+            "sha256": "de6845934e73089af0f88194db74da0e660cdca157e413f5406799f056ef431a"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -51,6 +51,14 @@
             ],
             "index": "pypi",
             "version": "==0.1.5"
+        },
+        "imapclient": {
+            "hashes": [
+                "sha256:3eeb97b9aa8faab0caa5024d74bfde59408fbd542781246f6960873c7bf0dd01",
+                "sha256:60ba79758cc9f13ec910d7a3df9acaaf2bb6c458720d9a02ec33a41352fd1b99"
+            ],
+            "index": "pypi",
+            "version": "==2.1.0"
         },
         "pavlova": {
             "hashes": [
