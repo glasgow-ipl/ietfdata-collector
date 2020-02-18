@@ -25,14 +25,6 @@
 
 import ietfdata.datatracker as DT
 import requests_cache
-import pathlib
-import json
-import requests
-import datetime
-import os
-import shutil
-import dateutil
-import pytz
 
 import sqlite3
 
