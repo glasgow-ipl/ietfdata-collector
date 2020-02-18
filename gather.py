@@ -34,132 +34,216 @@ import shutil
 import dateutil
 import pytz
 
+import sqlite3
+
 from typing import Iterator, Optional
-
-class EncodeUsingToJSON(json.JSONEncoder):
-    def default(self, object):
-        return object.toJSON()
-
-
-class SerialisablePersonEvent:
-    type         : str
-    desc         : str
-    time         : str
-
-    def __init__(self, event: DT.PersonEvent):
-        self.type = event.type
-        self.desc = event.desc
-        self.time = event.time
-
-    def toJSON(self):
-        return self.__dict__
-
-     
-class SerialisablePersonAlias:
-    name         : str
-
-    def __init__(self, alias: DT.PersonAlias):
-        self.name = alias.name
-
-    def toJSON(self):
-        return self.__dict__
-
-
-class SerialisableEmail:
-    address      : str
-    time         : str
-    origin       : str
-    primary      : bool
-    active       : bool
-
-    def __init__(self, email: DT.Email):
-        self.address = email.address
-        self.time = email.time
-        self.origin = email.origin
-        self.primary = email.primary
-        self.active = email.active
-
-    def toJSON(self):
-        return self.__dict__
-
-
-class SerialisablePerson:
-    id              : int
-    name            : str
-    name_from_draft : str
-    ascii           : str
-    ascii_short     : Optional[str]
-    user            : str
-    time            : str
-    photo           : str
-    photo_thumb     : str
-    biography       : str
-    consent         : bool
-
-    def __init__(self, person: DT.Person, emails: Iterator[DT.Email], aliases: Iterator[DT.PersonAlias], events: Iterator[DT.PersonEvent]):
-        self.id = person.id
-        self.name = person.name
-        self.name_from_draft = person.name_from_draft
-        self.ascii = person.ascii
-        self.ascii_short = person.ascii_short
-        self.user = person.user
-        self.time = person.time
-        self.photo = person.photo
-        self.photo_thumb = person.photo_thumb
-        self.biography = person.biography
-        self.consent = person.consent
-        self.emails = [SerialisableEmail(email) for email in emails]
-        self.aliases = [SerialisablePersonAlias(alias) for alias in aliases]
-        self.events = [SerialisablePersonEvent(event) for event in events]
-
-    def toJSON(self):
-        return self.__dict__
-
 
 class DataTrackerCollector:
     def __init__(self, use_cache=False):
         self.dt = DT.DataTracker()
+        self.conn = sqlite3.connect('ietfdata.db')
+        self.create_tables()
         if use_cache:
-                requests_cache.install_cache("dt_collector_cache")
-        pathlib.Path("data").mkdir(parents=True, exist_ok=True)
+            requests_cache.install_cache("dt_collector_cache")
 
-    def get_file_if_changed(self, uri: str, dest_filename: str):
-        r = requests.head(uri)
-        remote_lastmodified = dateutil.parser.parse(r.headers['last-modified'])
+
+    def gather_person(self, person: DT.Person):
         try:
-            local_lastmodified = pytz.UTC.localize(datetime.datetime.fromtimestamp(os.path.getmtime(dest_filename)))
-        except:
-            local_lastmodified = None
-        if local_lastmodified is None or remote_lastmodified > local_lastmodified:
-            r = requests.get(uri, verify=True)
-            if r.status_code == 200:
-                with open(dest_filename, "wb") as dest_file:
-                    r.raw.decode_content = True
-                    shutil.copyfileobj(r.raw, dest_file)
+            self.conn.execute("INSERT OR REPLACE INTO person VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (person.id,
+                             person.name,
+                             person.name_from_draft,
+                             person.ascii,
+                             person.ascii_short,
+                             person.user,
+                             person.time,
+                             person.photo,
+                             person.photo_thumb,
+                             person.biography,
+                             person.consent))
+            self.conn.commit()
+        except Exception as e:
+            print("Did not add data about person ID %d [%s]" % (person.id, e))
 
-    def serialise_person(self, person: DT.Person, emails: Iterator[DT.Email], aliases: Iterator[DT.PersonAlias], events: Iterator[DT.PersonEvent]):
-        pathlib.Path("data/people/%d" % (person.id)).mkdir(parents=True, exist_ok=True)
-        with open("data/people/%d/metadata.json" % person.id, "w") as personMetadataFile:
-            json.dump(SerialisablePerson(person, emails, aliases, events), personMetadataFile, indent=4, cls=EncodeUsingToJSON)
-        if (person.photo != "None"):
-            pathlib.Path("data/people/%d/media/photo" % (person.id)).mkdir(parents=True, exist_ok=True)
-            self.get_file_if_changed(person.photo, "data/people/%d/media/photo/%s" % (person.id, person.photo.split('/')[-1]))
-        if (person.photo_thumb != "None"):
-            pathlib.Path("data/people/%d/media/photo" % (person.id)).mkdir(parents=True, exist_ok=True)
-            self.get_file_if_changed(person.photo_thumb, "data/people/%d/media/photo/%s" % (person.id, person.photo_thumb.split('/')[-1]))
+
+    def gather_aliases(self, person: DT.Person):
+        for alias in self.dt.person_aliases(person):
+            try:
+                self.conn.execute("INSERT OR REPLACE INTO alias VALUES (?, ?, ?)",
+                                 (alias.id,
+                                  person.id,
+                                  alias.name))
+                self.conn.commit()
+            except Exception as e:
+                print(e)
+                print("Did not add alias for person ID %d [%s]" % (person.id, e))
+
+
+    def gather_emails(self, person: DT.Person):
+        for email in self.dt.email_for_person(person):
+            try:
+                self.conn.execute("INSERT OR REPLACE INTO email VALUES (?, ?, ?, ?, ?, ?)",
+                                 (person.id,
+                                  email.address,
+                                  email.time,
+                                  email.origin,
+                                  email.primary,
+                                  email.active))
+                self.conn.commit()
+            except Exception as e:
+                print(e)
+                print("Did not add email data for person ID %d [%s]" % (person.id, e))
+
+
+    def gather_historical_emails(self, person: DT.Person):
+        for historical_email in self.dt.email_history_for_person(person):
+            try:
+                self.conn.execute("INSERT OR REPLACE INTO historical_email VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                 (person.id,
+                                  historical_email.address,
+                                  historical_email.time,
+                                  historical_email.origin,
+                                  historical_email.primary,
+                                  historical_email.active,
+                                  historical_email.history_change_reason,
+                                  historical_email.history_user,
+                                  historical_email.history_id,
+                                  historical_email.history_type,
+                                  historical_email.history_date))
+                self.conn.commit()
+            except Exception as e:
+                print(e)
+                print("Did not add historical email data for person ID %d [%s]" % (person.id, e))
+
+
+    def gather_historical_people(self, person: DT.Person):
+        for historical_person in self.dt.person_history(person):
+            try:
+                self.conn.execute("INSERT OR REPLACE INTO historical_person VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                 (person.id,
+                                  historical_person.name,
+                                  historical_person.name_from_draft,
+                                  historical_person.ascii,
+                                  historical_person.ascii_short,
+                                  historical_person.user,
+                                  historical_person.time,
+                                  historical_person.photo,
+                                  historical_person.photo_thumb,
+                                  historical_person.biography,
+                                  historical_person.consent,
+                                  historical_person.history_change_reason,
+                                  historical_person.history_user,
+                                  historical_person.history_id,
+                                  historical_person.history_type,
+                                  historical_person.history_date))
+                self.conn.commit()
+            except Exception as e:
+                print(e)
+                print("Did not add historical person data for person ID %d [%s]" % (person.id, e))
+
+
+    def gather_person_events(self, person: DT.Person):
+        for person_event in self.dt.person_events(person):
+            try:
+                self.conn.execute("INSERT OR REPLACE INTO person_events VALUES (?, ?, ?, ?, ?)",
+                                 (person_event.desc,
+                                  person_event.id,
+                                  person.id,
+                                  person_event.time,
+                                  person_event.type))
+                self.conn.commit()
+            except Exception as e:
+                print(e)
+                print("Did not add person event for person ID %d [%s]" % (person.id, e))
+
 
     def gather_people(self):
-        pathlib.Path("data/people").mkdir(parents=True, exist_ok=True)
-        print("Gathering people..")
         for person in self.dt.people():
             print("Gathering data for %d.." % person.id)
-            emails = self.dt.email_for_person(person)
-            aliases = self.dt.person_aliases(person)
-            events = self.dt.person_events(person)
-            self.serialise_person(person, emails, aliases, events)
+            self.gather_person(person)
+            self.gather_aliases(person)
+            self.gather_emails(person)
+            self.gather_historical_emails(person)
+            self.gather_historical_people(person)
+            self.gather_person_events(person)
+
+
+    def create_tables(self):
+        # Person
+        self.conn.execute('''CREATE TABLE IF NOT EXISTS person (id              int  NOT NULL PRIMARY KEY,
+                                                                name            text NOT NULL,
+                                                                name_from_draft text NOT NULL,
+                                                                ascii           text NOT NULL,
+                                                                ascii_short     text,
+                                                                user            text NOT NULL,
+                                                                time            text NOT NULL,
+                                                                photo           text NOT NULL,
+                                                                photo_thumb     text NOT NULL,
+                                                                biography       text NOT NULL,
+                                                                consent         bool NOT NULL)''')
+
+        # Alias
+        self.conn.execute('''CREATE TABLE IF NOT EXISTS alias (id     int  NOT NULL PRIMARY KEY,
+                                                               person int  NOT NULL,
+                                                               name   text NOT NULL,
+                                                               FOREIGN KEY (person) REFERENCES person(id))''')
+
+
+        # Email
+        self.conn.execute('''CREATE TABLE IF NOT EXISTS email (person     int  NOT NULL,
+                                                               address    text NOT NULL PRIMARY KEY,
+                                                               time       text NOT NULL,
+                                                               origin     text NOT NULL,
+                                                               is_primary bool NOT NULL,
+                                                               active     bool NOT NULL,
+                                                               FOREIGN KEY (person) REFERENCES person(id))''')
+
+        # HistoricalEmail
+        self.conn.execute('''CREATE TABLE IF NOT EXISTS historical_email (person                int  NOT NULL,
+                                                                          address               text NOT NULL,
+                                                                          time                  text NOT NULL,
+                                                                          origin                text NOT NULL,
+                                                                          is_primary            bool NOT NULL,
+                                                                          active                bool NOT NULL,
+                                                                          history_change_reason text,
+                                                                          history_user          text,
+                                                                          history_id            int  NOT NULL PRIMARY KEY,
+                                                                          history_type          text NOT NULL,
+                                                                          history_date          text NOT NULL,
+                                                                          FOREIGN KEY (person) REFERENCES person(id))''')
+
+        # HistoricalPerson
+        self.conn.execute('''CREATE TABLE IF NOT EXISTS historical_person (id                    int  NOT NULL,
+                                                                           name                  text NOT NULL,
+                                                                           name_from_draft       text NOT NULL,
+                                                                           ascii                 text NOT NULL,
+                                                                           ascii_short           text,
+                                                                           user                  text NOT NULL,
+                                                                           time                  text NOT NULL,
+                                                                           photo                 text NOT NULL,
+                                                                           photo_thumb           text NOT NULL,
+                                                                           biography             text NOT NULL,
+                                                                           consent               bool NOT NULL,
+                                                                           history_change_reason text,
+                                                                           history_user          text,
+                                                                           history_id            int  NOT NULL PRIMARY KEY,
+                                                                           history_type          text NOT NULL,
+                                                                           history_date          text NOT NULL,
+                                                                           FOREIGN KEY (id) REFERENCES person(id))''')
+
+        # PersonEvent
+        self.conn.execute('''CREATE TABLE IF NOT EXISTS person_events (desc   text NOT NULL,
+                                                                       id     int  NOT NULL PRIMARY KEY,
+                                                                       person int  NOT NULL,
+                                                                       time   text NOT NULL,
+                                                                       type   text NOT NULL,
+                                                                       FOREIGN KEY (person) REFERENCES person(id))''')
+
 
     def gather(self):
         self.gather_people()
+        self.conn.close()
+
 
 if __name__ == "__main__":
     collector = DataTrackerCollector(use_cache=True)
