@@ -25,9 +25,9 @@
 
 import ietfdata.datatracker as DT
 import requests_cache
-
 import sqlite3
 
+from datetime import datetime
 from typing import Iterator, Optional
 
 class DataTrackerCollector:
@@ -238,5 +238,7 @@ class DataTrackerCollector:
 
 
 if __name__ == "__main__":
+    print("Started at %s" % datetime.now().strftime("%H:%M:%S (%d-%b-%Y)"))
     collector = DataTrackerCollector(use_cache=True)
     collector.gather()
+    print("Finished at %s" % datetime.now().strftime("%H:%M:%S (%d-%b-%Y)"))
